@@ -7,6 +7,7 @@ import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.apache.commons.lang3.tuple.Pair;
 import org.bukkit.*;
 import org.bukkit.block.*;
+import org.bukkit.block.data.BlockData;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.minecart.HopperMinecart;
@@ -16,9 +17,7 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.InventoryMoveItemEvent;
 import org.bukkit.event.inventory.InventoryPickupItemEvent;
 import org.bukkit.event.inventory.InventoryType;
-import org.bukkit.inventory.Inventory;
-import org.bukkit.inventory.InventoryHolder;
-import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.*;
 import org.bukkit.inventory.meta.EnchantmentStorageMeta;
 import org.bukkit.inventory.meta.PotionMeta;
 import org.bukkit.potion.PotionEffect;
@@ -77,36 +76,18 @@ public class InventoryActionListener implements Listener {
         final InventoryHolder sourceHolder = source.getHolder(false);
         final InventoryHolder destHolder = destination.getHolder(false);
 
+        boolean isDefaultHopper = false;
         String filterName = null;
 
-        if (sourceHolder instanceof Furnace
-                || sourceHolder instanceof BlastFurnace
-                || sourceHolder instanceof Smoker
-                || sourceHolder instanceof Campfire
-                || sourceHolder instanceof Container
-                && source.getType().toString().toLowerCase().contains("furnace")) {
-            return; // skip custom logic
-        }
-
-        boolean isDefaultHopper = false;
-        // Prefer filter on source (for output)
         if (isHopperWithFilter(sourceHolder)) {
             filterName = getCustomName(sourceHolder);
-        }
-        // Fallback: check destination (for input filters)
-        else if (isHopperWithFilter(destHolder)) {
+        } else if (isHopperWithFilter(destHolder)) {
             filterName = getCustomName(destHolder);
         } else {
             isDefaultHopper = true;
         }
 
         for (int i = 0; i < source.getSize(); i++) {
-            if (sourceHolder instanceof Furnace) {
-                ItemStack output = source.getItem(2);
-                if (output != null && !output.getType().isAir()) {
-                    return; // skip pulling from furnace output
-                }
-            }
             ItemStack stack = source.getItem(i);
             if (stack == null || stack.getType().isAir()) continue;
 
@@ -116,25 +97,68 @@ public class InventoryActionListener implements Listener {
             ItemStack toMove = stack.clone();
             toMove.setAmount(maxToMove);
 
-            Map<Integer, ItemStack> leftovers = destination.addItem(toMove);
-            int moved = maxToMove - leftovers.values().stream()
-                    .mapToInt(ItemStack::getAmount)
-                    .sum();
+            int moved = 0;
+
+            if (destination instanceof FurnaceInventory furnaceInv) {
+                Block sourceBlock = getBlockFromHolder(sourceHolder);
+                Block destBlock = getBlockFromHolder(destHolder);
+                if (sourceBlock == null || destBlock == null) return;
+
+                BlockFace direction = destBlock.getFace(sourceBlock);
+                if (direction == null) direction = BlockFace.UP; // fallback: assume from below
+
+                int slot = switch (direction) {
+                    case UP -> 0;     // from above = input
+                    case DOWN -> 2;   // from below = output (disallowed)
+                    default -> 1;     // from side = fuel
+                };
+
+                if (slot == 2) return;
+                if (slot == 0 && !hasFurnaceRecipe(toMove)) return;
+                if (slot == 1 && !toMove.getType().isFuel()) return;
+
+                ItemStack current = furnaceInv.getItem(slot);
+                if (current == null || current.getType().isAir()) {
+                    furnaceInv.setItem(slot, toMove);
+                    moved = toMove.getAmount();
+                } else if (current.isSimilar(toMove) && current.getAmount() < current.getMaxStackSize()) {
+                    int insertable = Math.min(toMove.getAmount(), current.getMaxStackSize() - current.getAmount());
+                    current.setAmount(current.getAmount() + insertable);
+                    furnaceInv.setItem(slot, current);
+                    moved = insertable;
+                }
+
+            } else {
+                Map<Integer, ItemStack> leftovers = destination.addItem(toMove);
+                moved = toMove.getAmount() - leftovers.values().stream().mapToInt(ItemStack::getAmount).sum();
+            }
 
             if (moved > 0) {
                 stack.setAmount(stack.getAmount() - moved);
                 source.setItem(i, stack.getAmount() > 0 ? stack : null);
             }
 
-            break; // Only move one stack
+            break;
         }
     }
+
+
 
 
     private boolean isHopperOrMinecart(InventoryHolder holder) {
         return holder instanceof Hopper
                 || holder instanceof HopperMinecart
                 || holder instanceof org.bukkit.entity.minecart.StorageMinecart;
+    }
+
+    private Block getBlockFromHolder(InventoryHolder holder) {
+        if (holder instanceof BlockState state) return state.getBlock();
+        return null;
+    }
+
+    private boolean hasFurnaceRecipe(ItemStack item) {
+        return Bukkit.getRecipesFor(item).stream()
+                .anyMatch(r -> r instanceof FurnaceRecipe);
     }
 
     private boolean isHopperWithFilter(InventoryHolder holder) {
