@@ -2,7 +2,16 @@ name: HopperFilter
 version: "${project.version}"
 main: net.earthmc.hopperfilter.HopperFilter
 api-version: "1.20"
-authors: [Fruitloopins]
-description: Name hoppers. Filter items.
+authors: [Fruitloopins, Kiko]
+description: Name hoppers. Filter items. Now with Regex.
 website: https://earthmc.net
 folia-supported: true
+commands:
+  hopperfilter:
+    description: Reload the HopperFilter plugin
+    usage: /<command> reload
+    permission: hopperfilter.reload
+permissions:
+  hopperfilter.reload:
+    description: Allows reloading the plugin
+    default: op

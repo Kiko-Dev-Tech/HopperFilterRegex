@@ -6,18 +6,35 @@
 
   <groupId>net.earthmc</groupId>
   <artifactId>HopperFilter</artifactId>
-  <version>0.3.7</version>
+  <version>0.4.1</version>
   <packaging>jar</packaging>
 
   <name>HopperFilter</name>
 
-    <description>Name hoppers. Filter items.</description>
+    <description>Name hoppers. Filter items. Now with Regex Filter!</description>
     <properties>
-    <java.version>17</java.version>
-    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-  </properties>
+        <java.version>17</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
     <url>https://earthmc.net</url>
-
+    <developers>
+        <developer>
+            <id>jwkerr</id>
+            <name>Fruitloopins</name>
+            <url>https://github.com/jwkerr</url>
+            <roles>
+                <role>creator</role>
+            </roles>
+        </developer>
+        <developer>
+            <id>kiko</id>
+            <name>Kiko</name>
+            <url>https://github.com/Kiko-Dev-Tech</url>
+            <roles>
+                <role>contributor(Regex Filer, rate config and optimization)</role>
+            </roles>
+        </developer>
+    </developers>
     <build>
     <plugins>
       <plugin>

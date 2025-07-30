@@ -1,5 +1,6 @@
 package net.earthmc.hopperfilter.listener;
 
+import net.earthmc.hopperfilter.HopperFilter;
 import net.earthmc.hopperfilter.util.ContainerUtil;
 import net.earthmc.hopperfilter.util.PatternUtil;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
@@ -9,8 +10,10 @@ import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 import org.bukkit.block.Hopper;
 import org.bukkit.enchantments.Enchantment;
+import org.bukkit.entity.Player;
 import org.bukkit.entity.minecart.HopperMinecart;
 import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.InventoryMoveItemEvent;
 import org.bukkit.event.inventory.InventoryPickupItemEvent;
@@ -24,46 +27,95 @@ import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import org.bukkit.potion.PotionType;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.PatternSyntaxException;
 
 public class InventoryActionListener implements Listener {
 
-    @EventHandler
+    private final HopperFilter plugin;
+
+    public InventoryActionListener(HopperFilter plugin) {
+        super();
+        this.plugin = plugin;
+    }
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onInventoryMoveItem(final InventoryMoveItemEvent event) {
-        final Inventory destination = event.getDestination();
-        if (!destination.getType().equals(InventoryType.HOPPER)) return;
+        InventoryHolder sourceHolder = event.getSource().getHolder(false);
+        InventoryHolder destHolder = event.getDestination().getHolder(false);
 
-        final ItemStack item = event.getItem();
-        final InventoryHolder holder = destination.getHolder(false);
+        if (!isHopperOrMinecart(sourceHolder) && !isHopperOrMinecart(destHolder)) return;
 
-        String hopperName;
-        if (holder instanceof final Hopper hopper) {
-            hopperName = PatternUtil.serialiseComponent(hopper.customName());
-        } else if (holder instanceof final HopperMinecart hopperMinecart) {
-            hopperName = PatternUtil.serialiseComponent(hopperMinecart.customName());
-        } else {
-            return;
-        }
-
-        if (!canItemPassHopper(hopperName, item)) {
-            event.setCancelled(true);
-            return;
-        }
-
-        // Checks below only matter for hopper blocks
-        if (!(holder instanceof Hopper hopper)) return;
-
-        // If there was a filter on this hopper we don't need to check for a more suitable hopper since this one is specifically filtering for this item
-        if (hopperName != null) return;
-
-        final Inventory source = event.getSource();
-
-        // If the item can pass, but there is a more suitable hopper with a filter we do this
-        if (shouldCancelDueToMoreSuitableHopper(source, hopper, item)) event.setCancelled(true);
+        event.setCancelled(true); // cancel default behavior
+        Bukkit.getScheduler().runTaskLater(plugin, () -> moveItem(event), 1L);
     }
 
-    @EventHandler
+    private void moveItem(InventoryMoveItemEvent event) {
+        final Inventory source = event.getSource();
+        final Inventory destination = event.getDestination();
+
+        final InventoryHolder sourceHolder = source.getHolder(false);
+        final InventoryHolder destHolder = destination.getHolder(false);
+
+        String filterName = null;
+
+        boolean isDefaultHopper = false;
+        // Prefer filter on source (for output)
+        if (isHopperWithFilter(sourceHolder)) {
+            filterName = getCustomName(sourceHolder);
+        }
+        // Fallback: check destination (for input filters)
+        else if (isHopperWithFilter(destHolder)) {
+            filterName = getCustomName(destHolder);
+        } else {
+            isDefaultHopper = true;
+        }
+
+        for (int i = 0; i < source.getSize(); i++) {
+            ItemStack stack = source.getItem(i);
+            if (stack == null || stack.getType().isAir()) continue;
+
+            if (!canItemPassHopper(filterName, stack) && !isDefaultHopper) continue;
+
+            int maxToMove = Math.min(plugin.getItemsPerTransfer(), stack.getAmount());
+            ItemStack toMove = stack.clone();
+            toMove.setAmount(maxToMove);
+
+            Map<Integer, ItemStack> leftovers = destination.addItem(toMove);
+            int moved = maxToMove - leftovers.values().stream()
+                    .mapToInt(ItemStack::getAmount)
+                    .sum();
+
+            if (moved > 0) {
+                stack.setAmount(stack.getAmount() - moved);
+                source.setItem(i, stack.getAmount() > 0 ? stack : null);
+            }
+
+            break; // Only move one stack
+        }
+    }
+
+
+    private boolean isHopperOrMinecart(InventoryHolder holder) {
+        return holder instanceof Hopper
+                || holder instanceof HopperMinecart
+                || holder instanceof org.bukkit.entity.minecart.StorageMinecart;
+    }
+
+    private boolean isHopperWithFilter(InventoryHolder holder) {
+        if (holder instanceof Hopper h) return h.customName() != null;
+        if (holder instanceof HopperMinecart h) return h.customName() != null;
+        return false;
+    }
+
+    private String getCustomName(InventoryHolder holder) {
+        if (holder instanceof Hopper h) return PatternUtil.serialiseComponent(h.customName());
+        if (holder instanceof HopperMinecart h) return PatternUtil.serialiseComponent(h.customName());
+        return null;
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onInventoryPickupItem(final InventoryPickupItemEvent event) {
         final Inventory inventory = event.getInventory();
         if (!inventory.getType().equals(InventoryType.HOPPER)) return;
@@ -125,6 +177,9 @@ public class InventoryActionListener implements Listener {
     private boolean canItemPassHopper(final String hopperName, final ItemStack item) {
         if (hopperName == null) return true;
 
+        if (hopperName.startsWith("r:")) {
+            return filterByRegex(hopperName, item);
+        }
         nextCondition: for (final String condition : hopperName.split(",")) {
             nextAnd: for (final String andString : condition.split("&")) {
                 for (final String orString : andString.split("\\|")) {
@@ -139,36 +194,49 @@ public class InventoryActionListener implements Listener {
         return false;
     }
 
+    /** Add Regex Support by Kiko (https://github.com/Kiko-Dev-Tech)
+     *
+     * @param pattern
+     * @param item
+     * @return
+     */
+    private boolean filterByRegex(final String pattern, final ItemStack item) {
+        final String itemName = item.getType().getKey().getKey();
+        if (pattern.isEmpty() || pattern.equals(itemName)) return true;
+        final String regex = pattern.substring(2);
+        try {
+            return itemName.matches(regex);
+        } catch (PatternSyntaxException e) {
+            Bukkit.getLogger().warning("Invalid regex pattern in hopper filter: " + regex);
+            return false;
+        }
+    }
+
     private boolean canItemPassPattern(final String pattern, final ItemStack item) {
         final String itemName = item.getType().getKey().getKey();
-
         if (pattern.isEmpty() || pattern.equals(itemName)) return true;
 
-        final char prefix = pattern.charAt(0); // The character at the start of the pattern
-        final String string = pattern.substring(1); // Anything after the prefix
+        final char prefix = pattern.charAt(0);
+        final String string = pattern.substring(1);
         return switch (prefix) {
-            case '!' -> !canItemPassPattern(string, item); // NOT operator
-            case '*' -> itemName.contains(string); // Contains specified pattern
-            case '^' -> itemName.startsWith(string); // Starts with specified pattern
-            case '$' -> itemName.endsWith(string); // Ends with specified pattern
-            case '#' -> { // Item has specified tag
+            case '!' -> !canItemPassPattern(string, item);
+            case '*' -> itemName.contains(string);
+            case '^' -> itemName.startsWith(string);
+            case '$' -> itemName.endsWith(string);
+            case '#' -> {
                 final NamespacedKey key = NamespacedKey.fromString(string);
                 if (key == null) yield false;
-
                 Tag<Material> tag = Bukkit.getTag(Tag.REGISTRY_BLOCKS, key, Material.class);
                 if (tag == null) tag = Bukkit.getTag(Tag.REGISTRY_ITEMS, key, Material.class);
-
                 yield tag != null && tag.isTagged(item.getType());
             }
-            case '~' -> doesItemHaveSpecifiedPotionEffect(item, string); // Item has specified potion effect
-            case '+' -> doesItemHaveSpecifiedEnchantment(item, string); // Item has specified enchantment
-            case '=' -> { // Item has specified name (including renames)
+            case '~' -> doesItemHaveSpecifiedPotionEffect(item, string);
+            case '+' -> doesItemHaveSpecifiedEnchantment(item, string);
+            case '=' -> {
                 String displayName = PlainTextComponentSerializer.plainText().serialize(item.displayName())
                         .toLowerCase()
                         .replaceAll(" ", "_");
-
                 displayName = displayName.substring(1, displayName.length() - 1);
-
                 yield displayName.equals(string);
             }
             default -> false;

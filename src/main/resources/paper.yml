@@ -1,0 +1,4 @@
+﻿hopper:
+  ignore_hopper_move_events: false  # must be false
+  cooldown: 8
+  tick-inactive: true

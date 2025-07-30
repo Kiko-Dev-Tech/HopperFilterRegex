@@ -1,0 +1,3 @@
+﻿
+transfer:
+  items-per-transfer: 1 #how many items are moved every 8 ticks
