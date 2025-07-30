@@ -6,9 +6,7 @@ import net.earthmc.hopperfilter.util.PatternUtil;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.apache.commons.lang3.tuple.Pair;
 import org.bukkit.*;
-import org.bukkit.block.Block;
-import org.bukkit.block.BlockFace;
-import org.bukkit.block.Hopper;
+import org.bukkit.block.*;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.minecart.HopperMinecart;
@@ -47,8 +45,29 @@ public class InventoryActionListener implements Listener {
 
         if (!isHopperOrMinecart(sourceHolder) && !isHopperOrMinecart(destHolder)) return;
 
+        if (isFurnace(sourceHolder)) {
+            String hopperName = getFilterName(event.getDestination().getHolder(false));
+            if (hopperName != null && !canItemPassHopper(hopperName, event.getItem())) {
+                event.setCancelled(true); // deny pulling this item
+            }
+            return; // let vanilla handle transfer rate
+        }
         event.setCancelled(true); // cancel default behavior
         Bukkit.getScheduler().runTaskLater(plugin, () -> moveItem(event), 1L);
+    }
+
+    private String getFilterName(InventoryHolder holder) {
+        if (holder instanceof Hopper h && h.customName() != null)
+            return PatternUtil.serialiseComponent(h.customName());
+        if (holder instanceof HopperMinecart h && h.customName() != null)
+            return PatternUtil.serialiseComponent(h.customName());
+        return null;
+    }
+
+    private boolean isFurnace(InventoryHolder holder) {
+        return holder instanceof Furnace
+                || holder instanceof BlastFurnace
+                || holder instanceof Smoker;
     }
 
     private void moveItem(InventoryMoveItemEvent event) {
@@ -59,6 +78,15 @@ public class InventoryActionListener implements Listener {
         final InventoryHolder destHolder = destination.getHolder(false);
 
         String filterName = null;
+
+        if (sourceHolder instanceof Furnace
+                || sourceHolder instanceof BlastFurnace
+                || sourceHolder instanceof Smoker
+                || sourceHolder instanceof Campfire
+                || sourceHolder instanceof Container
+                && source.getType().toString().toLowerCase().contains("furnace")) {
+            return; // skip custom logic
+        }
 
         boolean isDefaultHopper = false;
         // Prefer filter on source (for output)
@@ -73,6 +101,12 @@ public class InventoryActionListener implements Listener {
         }
 
         for (int i = 0; i < source.getSize(); i++) {
+            if (sourceHolder instanceof Furnace) {
+                ItemStack output = source.getItem(2);
+                if (output != null && !output.getType().isAir()) {
+                    return; // skip pulling from furnace output
+                }
+            }
             ItemStack stack = source.getItem(i);
             if (stack == null || stack.getType().isAir()) continue;
 
