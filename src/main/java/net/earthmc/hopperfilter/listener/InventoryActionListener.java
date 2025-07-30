@@ -43,6 +43,8 @@ public class InventoryActionListener implements Listener {
         InventoryHolder destHolder = event.getDestination().getHolder(false);
 
         if (!isHopperOrMinecart(sourceHolder) && !isHopperOrMinecart(destHolder)) return;
+        //excluded crafter
+        if (sourceHolder instanceof Crafter || destHolder instanceof Crafter) return;
 
         if (isFurnace(sourceHolder)) {
             String hopperName = getFilterName(event.getDestination().getHolder(false));
